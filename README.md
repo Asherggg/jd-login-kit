@@ -18,7 +18,7 @@
 ## 首次安装
 
 ```bash
-git clone <your-private-repo-url>
+git clone https://github.com/Asherggg/jd-login-kit.git
 cd jd-login-kit
 npm install
 npm run install:browsers
