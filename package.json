@@ -1,0 +1,18 @@
+{
+  "name": "jd-login-kit",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Portable JD login/captcha protocol toolkit with browser-native login flow.",
+  "scripts": {
+    "login": "node scripts/login_browser_native.mjs",
+    "login:browser": "node scripts/login_browser_native.mjs",
+    "login:protocol": "node lib/jd_login_service_protocol.mjs",
+    "install:browsers": "npx playwright install chromium",
+    "clean": "rm -rf outputs/* browser-profile && mkdir -p outputs && touch outputs/.gitkeep",
+    "setup:python": "bash scripts/setup_python.sh"
+  },
+  "dependencies": {
+    "playwright": "^1.54.0"
+  }
+}
