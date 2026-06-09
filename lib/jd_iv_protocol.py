@@ -239,16 +239,18 @@ def solver_distance(bg: Image.Image, patch: Image.Image, y_hint: int | None, ui_
         gap["solver"] = "builtin"
         return gap
 
-    if solver == "ddddocr":
+    if solver in {"ddddocr", "ddddocr-simple", "ddddocr-normal"}:
         global _DDDDOCR_SLIDE
         import ddddocr
         if _DDDDOCR_SLIDE is None:
             _DDDDOCR_SLIDE = ddddocr.DdddOcr(det=False, ocr=False, show_ad=False)
-        r = _DDDDOCR_SLIDE.slide_match(patch, bg, simple_target=False)
+        simple_target = solver != "ddddocr-normal"
+        r = _DDDDOCR_SLIDE.slide_match(patch, bg, simple_target=simple_target)
         bg_x = int(round(float(r.get("target_x", r.get("target", [0, 0])[0]))))
         ui_x = bg_x * ui_width / bg.size[0]
         return {
-            "solver": "ddddocr",
+            "solver": "ddddocr" if solver != "ddddocr-normal" else "ddddocr-normal",
+            "simple_target": simple_target,
             "raw": r,
             "chosen_x_bg": bg_x,
             "ui_first_last": ui_x,
@@ -571,7 +573,7 @@ def main():
     ap.add_argument("--slider-left", type=int, default=0)
     ap.add_argument("--slider-top", type=int, default=156)
     ap.add_argument("--distance", type=int, help="override down-distance in UI pixels")
-    ap.add_argument("--solver", default="builtin", help="image solver: builtin, ddddocr, captcha-recognizer")
+    ap.add_argument("--solver", default="builtin", help="image solver: builtin, ddddocr/simple_target, ddddocr-normal, captcha-recognizer")
     ap.add_argument("--captcha-min-confidence", type=float, default=0.8, help="fallback to builtin when captcha-recognizer confidence is below this")
     ap.add_argument("--distance-offsets", default="0,-1,1,-2,2,-3,3", help="comma-separated fail offset matrix in UI px")
     ap.add_argument("--trajectory-variants", type=int, default=3, help="number of same-distance trajectory variants for refuse handling")
