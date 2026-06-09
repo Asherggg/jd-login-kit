@@ -132,6 +132,27 @@ test('buildPythonSolverArgs forwards explicit slide solver selection', () => {
   assert.equal(args.at(-1), 'ddddocr');
 });
 
+
+test('buildPythonSolverArgs forwards captcha strategy tuning options', () => {
+  const args = buildPythonSolverArgs({
+    scriptPath: 'lib/jd_iv_protocol.py',
+    hidden: { eid: 'eid-1', eid2: 'jstk-1', sessionId: 'sid-1' },
+    username: 'jd_mercury',
+    outPrefix: 'outputs/out',
+    solver: 'captcha-recognizer',
+    captchaMinConfidence: 0.8,
+    distanceOffsets: '0,-1,1',
+    trajectoryVariants: 3,
+  });
+
+  assert.deepEqual(args.slice(-8), [
+    '--solver', 'captcha-recognizer',
+    '--captcha-min-confidence', '0.8',
+    '--distance-offsets', '0,-1,1',
+    '--trajectory-variants', '3',
+  ]);
+});
+
 test('parseSeqSessionId extracts jd seq session id', () => {
   assert.equal(
     parseSeqSessionId('var _jdtdmap_sessionId="4971126450824985710";var _jdtdseq_config_data={}'),

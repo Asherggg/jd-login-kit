@@ -34,6 +34,9 @@ function parseArgs(argv) {
     saveCookieValues: process.env.JD_SAVE_COOKIE_VALUES === 'true',
     pcTkPath: '',
     solver: process.env.JD_SLIDE_SOLVER || 'builtin',
+    captchaMinConfidence: process.env.JD_CAPTCHA_MIN_CONFIDENCE || '0.8',
+    distanceOffsets: process.env.JD_DISTANCE_OFFSETS || '0,-1,1,-2,2,-3,3',
+    trajectoryVariants: process.env.JD_TRAJECTORY_VARIANTS || '3',
   };
   for (let i = 2; i < argv.length; i++) {
     const a = argv[i];
@@ -373,6 +376,9 @@ function runSlideSolver({ args, hidden, jar, pageUrl, outPrefix, seqSid }) {
     warmSeq: args.warmSeq,
     passwordLen: args.password.length,
     solver: args.solver,
+    captchaMinConfidence: args.captchaMinConfidence,
+    distanceOffsets: args.distanceOffsets,
+    trajectoryVariants: args.trajectoryVariants,
   });
   const cp = spawnSync(args.python, solverArgs, { encoding: 'utf8', timeout: 120000, maxBuffer: 20_000_000 });
   fs.writeFileSync(`${outPrefix}_slide_stdout.json`, cp.stdout || '');

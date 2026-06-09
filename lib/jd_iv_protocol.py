@@ -185,10 +185,53 @@ def estimate_gap(bg: Image.Image, patch: Image.Image, y_hint: int | None, ui_wid
 
 
 
+
+def parse_distance_offsets(text: str | None) -> List[int]:
+    vals: List[int] = []
+    for part in str(text or '').split(','):
+        part = part.strip()
+        if not part:
+            continue
+        vals.append(int(part))
+    return vals or [0]
+
+
+def choose_solver_gap(requested_solver: str, candidate_gap: dict, builtin_gap: dict, *, min_confidence: float = 0.8) -> dict:
+    requested = (requested_solver or 'builtin').strip().lower()
+    if requested in {'captcha-recognizer', 'captcha_recognizer', 'recognizer'}:
+        conf = None
+        try:
+            conf = float((candidate_gap.get('raw') or {}).get('confidence'))
+        except Exception:
+            conf = None
+        if conf is None or conf < float(min_confidence):
+            chosen = dict(builtin_gap)
+            chosen['fallback_reason'] = 'captcha_confidence_below_threshold'
+            chosen['candidate_solver'] = candidate_gap.get('solver')
+            chosen['candidate_confidence'] = conf
+            chosen['candidate_distance'] = candidate_gap.get('down_distance')
+            return chosen
+    return candidate_gap
+
+
+def planned_submit_attempts(base_distance: int, offsets: Sequence[int], *, trajectory_variants: int = 1) -> List[dict]:
+    attempts: List[dict] = []
+    base_distance = max(1, int(base_distance))
+    variants = max(1, int(trajectory_variants or 1))
+    attempts.append({'distance': base_distance, 'offset': 0, 'trajectory_variant': 0, 'reason': 'initial'})
+    for variant in range(1, variants):
+        attempts.append({'distance': base_distance, 'offset': 0, 'trajectory_variant': variant, 'reason': 'refuse_variant'})
+    for off in offsets:
+        off = int(off)
+        if off == 0:
+            continue
+        attempts.append({'distance': max(1, base_distance + off), 'offset': off, 'trajectory_variant': 0, 'reason': 'fail_offset'})
+    return attempts
+
 _DDDDOCR_SLIDE = None
 _CAPTCHA_RECOGNIZER_SLIDER = None
 
-def solver_distance(bg: Image.Image, patch: Image.Image, y_hint: int | None, ui_width: int, solver: str = "builtin") -> dict:
+def solver_distance(bg: Image.Image, patch: Image.Image, y_hint: int | None, ui_width: int, solver: str = "builtin", *, captcha_min_confidence: float = 0.8) -> dict:
     """Return a JD UI drag distance using one of the available pure-HTTP image solvers."""
     solver = (solver or "builtin").strip().lower()
     if solver in {"builtin", "native", "edge"}:
@@ -234,13 +277,16 @@ def solver_distance(bg: Image.Image, patch: Image.Image, y_hint: int | None, ui_
         bg_x = float(r[0] if isinstance(r, (list, tuple)) else r)
         conf = float(r[1]) if isinstance(r, (list, tuple)) and len(r) > 1 else None
         ui_x = bg_x * ui_width / bg.size[0]
-        return {
+        candidate = {
             "solver": "captcha-recognizer",
             "raw": {"offset": bg_x, "confidence": conf},
             "chosen_x_bg": bg_x,
             "ui_first_last": ui_x,
             "down_distance": max(1, int(round(ui_x))),
         }
+        builtin = estimate_gap(bg, patch, y_hint, ui_width)
+        builtin["solver"] = "builtin"
+        return choose_solver_gap(solver, candidate, builtin, min_confidence=captcha_min_confidence)
 
     raise ValueError(f"unknown solver: {solver}")
 
@@ -526,6 +572,9 @@ def main():
     ap.add_argument("--slider-top", type=int, default=156)
     ap.add_argument("--distance", type=int, help="override down-distance in UI pixels")
     ap.add_argument("--solver", default="builtin", help="image solver: builtin, ddddocr, captcha-recognizer")
+    ap.add_argument("--captcha-min-confidence", type=float, default=0.8, help="fallback to builtin when captcha-recognizer confidence is below this")
+    ap.add_argument("--distance-offsets", default="0,-1,1,-2,2,-3,3", help="comma-separated fail offset matrix in UI px")
+    ap.add_argument("--trajectory-variants", type=int, default=3, help="number of same-distance trajectory variants for refuse handling")
     ap.add_argument("--out", default="work/protocol_chain/out_py")
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--warm-seq", action="store_true", help="send approximate seq.jd.com behavior chain before s.html")
@@ -581,13 +630,12 @@ def main():
         patch = decode_image(g["patch"], args.cookie)
         y = int(g.get("y") or 0)
         challenge = g.get("challenge") or g.get("c")
-    gap = solver_distance(bg, patch, y, args.w, args.solver)
+    gap = solver_distance(bg, patch, y, args.w, args.solver, captcha_min_confidence=args.captcha_min_confidence)
     if args.distance is not None:
         gap["down_distance"] = args.distance
         gap["override_distance"] = True
-    points = make_mouse_pos(args.slider_left, args.slider_top, gap["down_distance"])
-    d = get_coordinate(points)
-    s_url = build_s_url(g_url, args.s_template, challenge, d, args.w, args)
+    offsets = parse_distance_offsets(args.distance_offsets)
+    submit_plan = planned_submit_attempts(gap["down_distance"], offsets, trajectory_variants=args.trajectory_variants)
     save_debug(args.out, bg, patch, gap)
     seq_events = []
     real_seq_objects = extract_real_seq_objects(live, args.seq_json)
@@ -603,21 +651,81 @@ def main():
         "o": (live.get("oElementId") if live else g.get("o")),
         "y": y,
         "gap": gap,
-        "mousePos": points,
-        "mousePos_first": points[:3],
-        "mousePos_last": points[-3:],
-        "mousePos_len": len(points),
-        "d": d,
-        "s_url": s_url,
+        "submit_plan": submit_plan,
         "seq_events": seq_events,
     }
-    if not args.dry_run:
+    submit_attempts = []
+    idx = 0
+    allow_offsets = False
+    while idx < len(submit_plan):
+        item = submit_plan[idx]
+        if item.get("reason") == "fail_offset" and not allow_offsets:
+            break
+        points = make_mouse_pos(args.slider_left, args.slider_top, item["distance"])
+        d = get_coordinate(points)
+        s_url = build_s_url(g_url, args.s_template, challenge, d, args.w, args)
+        attempt_result = {
+            "index": idx,
+            **item,
+            "mousePos": points,
+            "mousePos_first": points[:3],
+            "mousePos_last": points[-3:],
+            "mousePos_len": len(points),
+            "d": d,
+            "s_url": s_url,
+        }
+        if args.dry_run:
+            submit_attempts.append(attempt_result)
+            break
         s_text = http_get(session, s_url, args.cookie)
-        result["s_response_text"] = s_text
+        attempt_result["s_response_text"] = s_text
         try:
-            result["s_response"] = jsonp_loads(s_text)
+            attempt_result["s_response"] = jsonp_loads(s_text)
         except Exception:
-            pass
+            attempt_result["s_response"] = None
+        submit_attempts.append(attempt_result)
+        sr = attempt_result.get("s_response") or {}
+        if str(sr.get("success")) == "1":
+            break
+        message = str(sr.get("message") or "")
+        # Refuse: keep trying same-distance trajectory variants only.
+        # Fail: switch immediately into the distance-offset matrix.
+        if message == "fail":
+            allow_offsets = True
+            next_offsets = [i for i, a in enumerate(submit_plan) if i > idx and a.get("reason") == "fail_offset"]
+            if not next_offsets:
+                break
+            idx = next_offsets[0]
+        else:
+            idx += 1
+        time.sleep(random.uniform(0.12, 0.35))
+    result["submit_attempts"] = submit_attempts
+    if submit_attempts:
+        last = submit_attempts[-1]
+        result.update({
+            "mousePos": last["mousePos"],
+            "mousePos_first": last["mousePos_first"],
+            "mousePos_last": last["mousePos_last"],
+            "mousePos_len": last["mousePos_len"],
+            "d": last["d"],
+            "s_url": last["s_url"],
+            "s_response_text": last.get("s_response_text"),
+            "s_response": last.get("s_response"),
+        })
+        for attempt_result in submit_attempts:
+            sr = attempt_result.get("s_response") or {}
+            if str(sr.get("success")) == "1":
+                result.update({
+                    "mousePos": attempt_result["mousePos"],
+                    "mousePos_first": attempt_result["mousePos_first"],
+                    "mousePos_last": attempt_result["mousePos_last"],
+                    "mousePos_len": attempt_result["mousePos_len"],
+                    "d": attempt_result["d"],
+                    "s_url": attempt_result["s_url"],
+                    "s_response_text": attempt_result.get("s_response_text"),
+                    "s_response": sr,
+                })
+                break
     print(json.dumps(result, ensure_ascii=False, indent=2))
 
 
