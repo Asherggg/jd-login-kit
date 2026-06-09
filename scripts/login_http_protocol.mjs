@@ -37,6 +37,11 @@ function parseArgs(argv) {
     captchaMinConfidence: process.env.JD_CAPTCHA_MIN_CONFIDENCE || '0.8',
     distanceOffsets: process.env.JD_DISTANCE_OFFSETS || '0,-1,1,-2,2,-3,3',
     trajectoryVariants: process.env.JD_TRAJECTORY_VARIANTS || '3',
+    ddddocrPresets: process.env.JD_DDDDOCR_PRESETS || '',
+    ddddocrCoordinate: process.env.JD_DDDDOCR_COORDINATE || '',
+    ddddocrMinConfidence: process.env.JD_DDDDOCR_MIN_CONFIDENCE || '',
+    ddddocrDistanceRange: process.env.JD_DDDDOCR_DISTANCE_RANGE || '',
+    ddddocrBenchmarkJson: process.env.JD_DDDDOCR_BENCHMARK_JSON || '',
   };
   for (let i = 2; i < argv.length; i++) {
     const a = argv[i];
@@ -379,6 +384,11 @@ function runSlideSolver({ args, hidden, jar, pageUrl, outPrefix, seqSid }) {
     captchaMinConfidence: args.captchaMinConfidence,
     distanceOffsets: args.distanceOffsets,
     trajectoryVariants: args.trajectoryVariants,
+    ddddocrPresets: args.ddddocrPresets,
+    ddddocrCoordinate: args.ddddocrCoordinate,
+    ddddocrMinConfidence: args.ddddocrMinConfidence,
+    ddddocrDistanceRange: args.ddddocrDistanceRange,
+    ddddocrBenchmarkJson: args.ddddocrBenchmarkJson,
   });
   const cp = spawnSync(args.python, solverArgs, { encoding: 'utf8', timeout: 120000, maxBuffer: 20_000_000 });
   fs.writeFileSync(`${outPrefix}_slide_stdout.json`, cp.stdout || '');

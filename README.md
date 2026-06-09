@@ -67,6 +67,7 @@ COOKIE_NAMES=_t,3AB9...,thor,pin,unick,_pst,...
 - 滑块服务端偶发 `refuse` 属正常现象，脚本会 fresh challenge 重试；可用 `--attempts 12` 增加次数。
 - Recommended slide solver: `--solver captcha-recognizer`. Strategy options: `--captcha-min-confidence 0.8` falls back to builtin on low confidence; `--trajectory-variants 3` retries trajectory variants for `refuse`; `--distance-offsets 0,-1,1,-2,2,-3,3` tries an offset matrix for `fail`.
 - `--solver ddddocr` uses `slide_match(..., simple_target=True)` for slider captcha matching; use `--solver ddddocr-normal` only for the legacy `simple_target=False` mode.
+- Pure ddddocr tuning mode: `--solver ddddocr-tuned --ddddocr-presets alpha-crop-simple,edge-crop-simple,roi-y-simple,contrast-simple,raw-simple,raw-edge --ddddocr-coordinate auto --ddddocr-min-confidence 0.2 --ddddocr-distance-range 45,135`. Offline analysis: `npm run benchmark:ddddocr -- --limit 60`.
 - 这个入口拿到的是 HTTP cookie jar，不会自动写入当前 Edge/Chrome 用户数据目录。
 
 ## 推荐使用：浏览器原生登录

@@ -228,10 +228,243 @@ def planned_submit_attempts(base_distance: int, offsets: Sequence[int], *, traje
         attempts.append({'distance': max(1, base_distance + off), 'offset': off, 'trajectory_variant': 0, 'reason': 'fail_offset'})
     return attempts
 
+
+def parse_distance_range(text: str | None) -> tuple[int, int]:
+    parts = [p.strip() for p in str(text or '45,135').split(',') if p.strip()]
+    if len(parts) != 2:
+        raise ValueError(f'bad distance range: {text!r}')
+    lo, hi = int(parts[0]), int(parts[1])
+    if lo > hi:
+        lo, hi = hi, lo
+    return lo, hi
+
+
+def parse_ddddocr_presets(text: str | None) -> list[str]:
+    presets = [p.strip() for p in str(text or '').split(',') if p.strip()]
+    return presets or ['alpha-crop-simple', 'edge-crop-simple', 'roi-y-simple', 'contrast-simple', 'raw-simple', 'raw-edge']
+
+
+def crop_patch_alpha(img: Image.Image) -> tuple[Image.Image, dict]:
+    rgba = img.convert('RGBA')
+    alpha = rgba.getchannel('A')
+    bbox = alpha.getbbox()
+    if not bbox:
+        return rgba, {'offset_x': 0, 'offset_y': 0, 'bbox': [0, 0, rgba.size[0], rgba.size[1]], 'method': 'alpha-none'}
+    cropped = rgba.crop(bbox)
+    return cropped, {'offset_x': bbox[0], 'offset_y': bbox[1], 'bbox': list(bbox), 'method': 'alpha'}
+
+
+def crop_patch_edge(img: Image.Image) -> tuple[Image.Image, dict]:
+    rgba = img.convert('RGBA')
+    alpha_crop, meta = crop_patch_alpha(rgba)
+    if meta.get('method') == 'alpha' and alpha_crop.size != rgba.size:
+        meta = dict(meta)
+        meta['method'] = 'edge-alpha'
+        return alpha_crop, meta
+    gray = rgba.convert('L')
+    pix = gray.load()
+    w, h = gray.size
+    xs, ys = [], []
+    # Keep pixels that differ from near-transparent/near-white borders.
+    for y in range(h):
+        for x in range(w):
+            v = pix[x, y]
+            if 8 < v < 245:
+                xs.append(x); ys.append(y)
+    if not xs:
+        return rgba, {'offset_x': 0, 'offset_y': 0, 'bbox': [0, 0, w, h], 'method': 'edge-none'}
+    bbox = (max(0, min(xs) - 1), max(0, min(ys) - 1), min(w, max(xs) + 2), min(h, max(ys) + 2))
+    return rgba.crop(bbox), {'offset_x': bbox[0], 'offset_y': bbox[1], 'bbox': list(bbox), 'method': 'edge'}
+
+
+def contrast_image(img: Image.Image) -> Image.Image:
+    from PIL import ImageOps, ImageEnhance
+    rgb = img.convert('RGB')
+    rgb = ImageOps.autocontrast(rgb)
+    return ImageEnhance.Contrast(rgb).enhance(1.45)
+
+
+def roi_background_y(bg: Image.Image, patch: Image.Image, y_hint: int | None) -> tuple[Image.Image, dict]:
+    if y_hint is None:
+        return bg, {'offset_x': 0, 'offset_y': 0, 'method': 'roi-none'}
+    y_hint = int(y_hint or 0)
+    pad = max(35, patch.size[1] // 2 + 18)
+    top = max(0, y_hint - pad)
+    bottom = min(bg.size[1], y_hint + patch.size[1] + pad)
+    if bottom - top < patch.size[1] + 4:
+        return bg, {'offset_x': 0, 'offset_y': 0, 'method': 'roi-too-small'}
+    return bg.crop((0, top, bg.size[0], bottom)), {'offset_x': 0, 'offset_y': top, 'method': 'roi-y'}
+
+
+def normalize_ddddocr_x(candidate: dict, coordinate: str) -> float:
+    coordinate = (coordinate or 'center').strip().lower()
+    raw_x = float(candidate.get('raw_target_x') or 0)
+    width = float(candidate.get('target_width') or 0)
+    bg_offset_x = float(candidate.get('bg_offset_x') or 0)
+    target_offset_x = float(candidate.get('target_offset_x') or 0)
+    if coordinate == 'center':
+        return raw_x + bg_offset_x
+    if coordinate == 'left':
+        return raw_x - width / 2.0 + bg_offset_x
+    if coordinate == 'scaled-left':
+        return raw_x - width / 2.0 - target_offset_x + bg_offset_x
+    raise ValueError(f'unknown ddddocr coordinate: {coordinate}')
+
+
+def ddddocr_coordinates_for_mode(candidate: dict, mode: str) -> list[str]:
+    mode = (mode or 'auto').strip().lower()
+    if mode == 'auto':
+        # Keep center first because ddddocr reports center_x; left variants are still considered
+        # for cropped presets where the returned center often drifts right.
+        return ['center', 'left', 'scaled-left']
+    return [mode]
+
+
+def choose_ddddocr_candidate(candidates: list[dict], *, min_confidence: float = 0.2, distance_range: tuple[int, int] = (45, 135)) -> dict:
+    lo, hi = distance_range
+    accepted = []
+    rejected = []
+    for c in candidates:
+        conf = c.get('confidence')
+        conf_ok = conf is None or float(conf) >= float(min_confidence)
+        dist = float(c.get('ui_distance') or 0)
+        dist_ok = lo <= dist <= hi
+        item = dict(c)
+        item['accepted'] = bool(conf_ok and dist_ok)
+        if not conf_ok:
+            item['reject_reason'] = 'confidence_below_threshold'
+        elif not dist_ok:
+            item['reject_reason'] = 'distance_out_of_range'
+        if item['accepted']:
+            accepted.append(item)
+        else:
+            rejected.append(item)
+    if not accepted:
+        return {
+            'skipped': True,
+            'skip_reason': 'skipped_bad_ddddocr_candidate',
+            'reject_count': len(rejected),
+            'rejected_candidates': rejected,
+        }
+    # Prefer high confidence, then distances near the center of allowed UI range.
+    mid = (lo + hi) / 2.0
+    accepted.sort(key=lambda c: (float(c.get('confidence') or 0.0), -abs(float(c.get('ui_distance') or 0) - mid)), reverse=True)
+    chosen = dict(accepted[0])
+    chosen['reject_count'] = len(rejected)
+    chosen['accepted_candidates'] = accepted
+    chosen['rejected_candidates'] = rejected
+    return chosen
+
+
+def _get_ddddocr_slide():
+    global _DDDDOCR_SLIDE
+    import ddddocr
+    if _DDDDOCR_SLIDE is None:
+        _DDDDOCR_SLIDE = ddddocr.DdddOcr(det=False, ocr=False, show_ad=False)
+    return _DDDDOCR_SLIDE
+
+
+def ddddocr_preset_images(bg: Image.Image, patch: Image.Image, y_hint: int | None, preset: str) -> tuple[Image.Image, Image.Image, dict]:
+    preset = preset.strip().lower()
+    meta = {'preset': preset, 'target_offset_x': 0, 'target_offset_y': 0, 'bg_offset_x': 0, 'bg_offset_y': 0}
+    work_bg = bg.convert('RGBA')
+    work_patch = patch.convert('RGBA')
+    if preset.startswith('alpha-crop'):
+        work_patch, cm = crop_patch_alpha(work_patch)
+        meta.update({'target_offset_x': cm['offset_x'], 'target_offset_y': cm['offset_y'], 'crop': cm})
+    elif preset.startswith('edge-crop'):
+        work_patch, cm = crop_patch_edge(work_patch)
+        meta.update({'target_offset_x': cm['offset_x'], 'target_offset_y': cm['offset_y'], 'crop': cm})
+    if preset.startswith('roi-y'):
+        work_bg, bm = roi_background_y(work_bg, work_patch, y_hint)
+        meta.update({'bg_offset_x': bm['offset_x'], 'bg_offset_y': bm['offset_y'], 'bg_crop': bm})
+    if preset.startswith('contrast'):
+        work_bg = contrast_image(work_bg)
+        work_patch = contrast_image(work_patch)
+    return work_bg, work_patch, meta
+
+
+def ddddocr_tuned_candidates(bg: Image.Image, patch: Image.Image, y_hint: int | None, ui_width: int, *, presets: str | None = None, coordinate: str = 'auto') -> list[dict]:
+    ocr = _get_ddddocr_slide()
+    out: list[dict] = []
+    bg_width = bg.size[0]
+    for preset in parse_ddddocr_presets(presets):
+        simple = not preset.endswith('-edge') and preset != 'raw-edge'
+        try:
+            work_bg, work_patch, meta = ddddocr_preset_images(bg, patch, y_hint, preset)
+            raw = ocr.slide_match(work_patch, work_bg, simple_target=simple)
+            raw_x = float(raw.get('target_x', raw.get('target', [0, 0])[0]))
+            base = {
+                'preset': preset,
+                'simple_target': simple,
+                'raw': raw,
+                'raw_target_x': raw_x,
+                'raw_target_y': raw.get('target_y', raw.get('target', [None, None])[1] if raw.get('target') else None),
+                'confidence': raw.get('confidence'),
+                'target_width': work_patch.size[0],
+                'target_height': work_patch.size[1],
+                **meta,
+            }
+            for coord in ddddocr_coordinates_for_mode(base, coordinate):
+                try:
+                    x_bg = normalize_ddddocr_x(base, coord)
+                except ValueError:
+                    raise
+                ui = x_bg * ui_width / bg_width
+                cand = dict(base)
+                cand.update({
+                    'coordinate': coord,
+                    'normalized_x_bg': x_bg,
+                    'ui_distance': ui,
+                    'down_distance': max(1, int(round(ui))),
+                })
+                out.append(cand)
+        except Exception as e:
+            out.append({'preset': preset, 'error': repr(e), 'accepted': False, 'reject_reason': 'preset_error'})
+    return out
+
+
+def ddddocr_tuned_gap(bg: Image.Image, patch: Image.Image, y_hint: int | None, ui_width: int, *, presets: str | None = None, coordinate: str = 'auto', min_confidence: float = 0.2, distance_range: str | tuple[int, int] = (45, 135)) -> dict:
+    dr = parse_distance_range(distance_range) if isinstance(distance_range, str) else distance_range
+    candidates = ddddocr_tuned_candidates(bg, patch, y_hint, ui_width, presets=presets, coordinate=coordinate)
+    chosen = choose_ddddocr_candidate(candidates, min_confidence=min_confidence, distance_range=dr)
+    if chosen.get('skipped'):
+        return {
+            'solver': 'ddddocr-tuned',
+            'skipped': True,
+            'skip_reason': chosen['skip_reason'],
+            'down_distance': 1,
+            'chosen_x_bg': 0,
+            'ui_first_last': 0,
+            'candidates': candidates,
+            'rejected_candidates': chosen.get('rejected_candidates', []),
+            'reject_count': chosen.get('reject_count', 0),
+            's_response': {'success': '0', 'message': chosen['skip_reason'], 'nextVerify': 'SKIP_SUBMIT'},
+        }
+    return {
+        'solver': 'ddddocr-tuned',
+        'preset': chosen.get('preset'),
+        'coordinate': chosen.get('coordinate'),
+        'simple_target': chosen.get('simple_target'),
+        'raw': chosen.get('raw'),
+        'raw_target_x': chosen.get('raw_target_x'),
+        'normalized_x_bg': chosen.get('normalized_x_bg'),
+        'chosen_x_bg': chosen.get('normalized_x_bg'),
+        'ui_first_last': chosen.get('ui_distance'),
+        'down_distance': max(1, int(round(chosen.get('ui_distance') or 1))),
+        'confidence': chosen.get('confidence'),
+        'candidates': candidates,
+        'accepted_candidates': chosen.get('accepted_candidates', []),
+        'rejected_candidates': chosen.get('rejected_candidates', []),
+        'reject_count': chosen.get('reject_count', 0),
+        'distance_range': list(dr),
+        'min_confidence': min_confidence,
+    }
+
 _DDDDOCR_SLIDE = None
 _CAPTCHA_RECOGNIZER_SLIDER = None
 
-def solver_distance(bg: Image.Image, patch: Image.Image, y_hint: int | None, ui_width: int, solver: str = "builtin", *, captcha_min_confidence: float = 0.8) -> dict:
+def solver_distance(bg: Image.Image, patch: Image.Image, y_hint: int | None, ui_width: int, solver: str = "builtin", *, captcha_min_confidence: float = 0.8, ddddocr_presets: str | None = None, ddddocr_coordinate: str = 'auto', ddddocr_min_confidence: float = 0.2, ddddocr_distance_range: str | tuple[int, int] = (45, 135)) -> dict:
     """Return a JD UI drag distance using one of the available pure-HTTP image solvers."""
     solver = (solver or "builtin").strip().lower()
     if solver in {"builtin", "native", "edge"}:
@@ -239,13 +472,18 @@ def solver_distance(bg: Image.Image, patch: Image.Image, y_hint: int | None, ui_
         gap["solver"] = "builtin"
         return gap
 
+    if solver == "ddddocr-tuned":
+        return ddddocr_tuned_gap(
+            bg, patch, y_hint, ui_width,
+            presets=ddddocr_presets,
+            coordinate=ddddocr_coordinate,
+            min_confidence=ddddocr_min_confidence,
+            distance_range=ddddocr_distance_range,
+        )
+
     if solver in {"ddddocr", "ddddocr-simple", "ddddocr-normal"}:
-        global _DDDDOCR_SLIDE
-        import ddddocr
-        if _DDDDOCR_SLIDE is None:
-            _DDDDOCR_SLIDE = ddddocr.DdddOcr(det=False, ocr=False, show_ad=False)
         simple_target = solver != "ddddocr-normal"
-        r = _DDDDOCR_SLIDE.slide_match(patch, bg, simple_target=simple_target)
+        r = _get_ddddocr_slide().slide_match(patch, bg, simple_target=simple_target)
         bg_x = int(round(float(r.get("target_x", r.get("target", [0, 0])[0]))))
         ui_x = bg_x * ui_width / bg.size[0]
         return {
@@ -577,6 +815,11 @@ def main():
     ap.add_argument("--captcha-min-confidence", type=float, default=0.8, help="fallback to builtin when captcha-recognizer confidence is below this")
     ap.add_argument("--distance-offsets", default="0,-1,1,-2,2,-3,3", help="comma-separated fail offset matrix in UI px")
     ap.add_argument("--trajectory-variants", type=int, default=3, help="number of same-distance trajectory variants for refuse handling")
+    ap.add_argument("--ddddocr-presets", default="", help="comma-separated pure ddddocr tuned presets")
+    ap.add_argument("--ddddocr-coordinate", default="auto", choices=["center", "left", "scaled-left", "auto"], help="coordinate normalization for ddddocr tuned candidates")
+    ap.add_argument("--ddddocr-min-confidence", type=float, default=0.2, help="minimum ddddocr confidence for tuned candidates")
+    ap.add_argument("--ddddocr-distance-range", default="45,135", help="accepted UI distance range for ddddocr tuned candidates")
+    ap.add_argument("--ddddocr-benchmark-json", default="", help="optional JSON path to write ddddocr tuned per-run benchmark details")
     ap.add_argument("--out", default="work/protocol_chain/out_py")
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--warm-seq", action="store_true", help="send approximate seq.jd.com behavior chain before s.html")
@@ -632,7 +875,14 @@ def main():
         patch = decode_image(g["patch"], args.cookie)
         y = int(g.get("y") or 0)
         challenge = g.get("challenge") or g.get("c")
-    gap = solver_distance(bg, patch, y, args.w, args.solver, captcha_min_confidence=args.captcha_min_confidence)
+    gap = solver_distance(
+        bg, patch, y, args.w, args.solver,
+        captcha_min_confidence=args.captcha_min_confidence,
+        ddddocr_presets=args.ddddocr_presets,
+        ddddocr_coordinate=args.ddddocr_coordinate,
+        ddddocr_min_confidence=args.ddddocr_min_confidence,
+        ddddocr_distance_range=args.ddddocr_distance_range,
+    )
     if args.distance is not None:
         gap["down_distance"] = args.distance
         gap["override_distance"] = True
@@ -657,6 +907,16 @@ def main():
         "seq_events": seq_events,
     }
     submit_attempts = []
+    if gap.get('skipped'):
+        result['s_response'] = gap.get('s_response') or {'success': '0', 'message': gap.get('skip_reason', 'skipped')}
+        result['s_response_text'] = json.dumps(result['s_response'], ensure_ascii=False)
+        result['submit_attempts'] = []
+        if args.ddddocr_benchmark_json:
+            os.makedirs(os.path.dirname(args.ddddocr_benchmark_json) or '.', exist_ok=True)
+            with open(args.ddddocr_benchmark_json, 'w', encoding='utf-8') as f:
+                json.dump(result, f, ensure_ascii=False, indent=2, default=str)
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return
     idx = 0
     allow_offsets = False
     while idx < len(submit_plan):
@@ -728,6 +988,10 @@ def main():
                     "s_response": sr,
                 })
                 break
+    if args.ddddocr_benchmark_json:
+        os.makedirs(os.path.dirname(args.ddddocr_benchmark_json) or '.', exist_ok=True)
+        with open(args.ddddocr_benchmark_json, 'w', encoding='utf-8') as f:
+            json.dump(result, f, ensure_ascii=False, indent=2, default=str)
     print(json.dumps(result, ensure_ascii=False, indent=2))
 
 

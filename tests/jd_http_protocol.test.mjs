@@ -153,6 +153,32 @@ test('buildPythonSolverArgs forwards captcha strategy tuning options', () => {
   ]);
 });
 
+
+
+test('buildPythonSolverArgs forwards ddddocr tuned options', () => {
+  const args = buildPythonSolverArgs({
+    scriptPath: 'lib/jd_iv_protocol.py',
+    hidden: { eid: 'eid-1', eid2: 'jstk-1', sessionId: 'sid-1' },
+    username: 'jd_mercury',
+    outPrefix: 'outputs/out',
+    solver: 'ddddocr-tuned',
+    ddddocrPresets: 'alpha-crop-simple,roi-y-simple',
+    ddddocrCoordinate: 'auto',
+    ddddocrMinConfidence: 0.2,
+    ddddocrDistanceRange: '45,135',
+    ddddocrBenchmarkJson: 'outputs/ddddocr_tuning_summary.json',
+  });
+
+  assert.deepEqual(args.slice(-12), [
+    '--solver', 'ddddocr-tuned',
+    '--ddddocr-presets', 'alpha-crop-simple,roi-y-simple',
+    '--ddddocr-coordinate', 'auto',
+    '--ddddocr-min-confidence', '0.2',
+    '--ddddocr-distance-range', '45,135',
+    '--ddddocr-benchmark-json', 'outputs/ddddocr_tuning_summary.json',
+  ]);
+});
+
 test('parseSeqSessionId extracts jd seq session id', () => {
   assert.equal(
     parseSeqSessionId('var _jdtdmap_sessionId="4971126450824985710";var _jdtdseq_config_data={}'),

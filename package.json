@@ -12,7 +12,8 @@
     "test": "node --test",
     "install:browsers": "npx playwright install chromium",
     "clean": "rm -rf outputs/* browser-profile && mkdir -p outputs && touch outputs/.gitkeep",
-    "setup:python": "bash scripts/setup_python.sh"
+    "setup:python": "bash scripts/setup_python.sh",
+    "benchmark:ddddocr": "python scripts/benchmark_ddddocr_tuned.py"
   },
   "dependencies": {
     "playwright": "^1.54.0"
