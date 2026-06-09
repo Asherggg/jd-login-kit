@@ -7,13 +7,14 @@
 ## 功能
 
 - 浏览器原生登录流程：打开登录页、输入账号密码、触发滑块、生成轨迹、在浏览器内调用 `jdSlide.submit()`，让浏览器自己完成 `s.html`、`loginService`、cookie 写入和跳转。
+- 无浏览器内核协议登录流程：不用 Playwright/Chrome/Edge，直接用 Node HTTP + Node VM 复现 `pc-tk.js` 指纹 token，用 Python 识别滑块并走 `/slide/g.html`、`/slide/s.html`、`/common/loginService`。
 - 纯协议工具：保留 `lib/jd_iv_protocol.py` 和 `lib/jd_login_service_protocol.mjs`，便于调试验证码和登录接口。
 
 ## 环境要求
 
 - Node.js 18+
 - Python 3.10+
-- Chrome/Chromium，或 Playwright 自动安装的 Chromium
+- 无浏览器协议入口不需要 Chrome/Chromium；浏览器原生入口才需要 Chrome/Chromium，或 Playwright 自动安装的 Chromium
 
 ## 首次安装
 
@@ -21,9 +22,50 @@
 git clone https://github.com/Asherggg/jd-login-kit.git
 cd jd-login-kit
 npm install
-npm run install:browsers
 python3 -m pip install -r requirements.txt
 ```
+
+如果要使用浏览器原生入口，再安装 Playwright 浏览器：
+
+```bash
+npm run install:browsers
+```
+
+## 无浏览器内核协议登录
+
+```bash
+npm run login:http -- --username "your_username" --password "your_password"
+```
+
+或使用环境变量，避免密码进入 shell 历史：
+
+```bash
+export JD_USERNAME="your_username"
+export JD_PASSWORD="your_password"
+npm run login:http -- --attempts 8
+```
+
+这个入口不会启动 Playwright/Chrome/Edge。它会：
+
+1. 纯 HTTP 拉取 `passport.jd.com/common/loginPage`；
+2. 在 Node VM 里执行 `pc-tk.js`，生成 `eid/eid2/fp/_gia_d`；
+3. 拉取 `seq.jd.com/jseqf.html` 得到 `_jdtdmap_sessionId`；
+4. Python 协议调用 `/slide/g.html`、识别图片距离、提交 `/slide/s.html`；
+5. 带 `validate/authcode` POST `/common/loginService`，并跟随 SSO URL 收集登录 cookie。
+
+成功输出示例：
+
+```txt
+LOGIN_OK_HTTP_PROTOCOL
+OUTPUT_PREFIX=D:\coding\project\jd-login-kit\outputs\...
+COOKIE_NAMES=_t,3AB9...,thor,pin,unick,_pst,...
+```
+
+说明：
+
+- 默认会发送协议版 seq 行为日志，降低 `newSafeVerify` 概率；调试时可加 `--no-warm-seq` 关闭。
+- 滑块服务端偶发 `refuse` 属正常现象，脚本会 fresh challenge 重试；可用 `--attempts 12` 增加次数。
+- 这个入口拿到的是 HTTP cookie jar，不会自动写入当前 Edge/Chrome 用户数据目录。
 
 ## 推荐使用：浏览器原生登录
 
@@ -120,9 +162,11 @@ node lib/jd_login_service_protocol.mjs \
 
 ```txt
 lib/jd_iv_protocol.py              # Python 版滑块图像识别、轨迹生成、d 参数生成
+lib/jd_http_protocol.mjs           # Node 版无浏览器 HTTP/登录字段/cookie 辅助模块
 lib/jd_login_service_protocol.mjs  # Node 版 /common/loginService 纯协议提交
 lib/dump_fresh_with_seq.js         # 浏览器 iframe 内 fresh state/seq 抓取脚本
 scripts/login_browser_native.mjs   # 推荐入口：浏览器原生登录自动化
+scripts/login_http_protocol.mjs    # 无浏览器内核协议登录入口
 ```
 
 ## 常见问题

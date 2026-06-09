@@ -7,7 +7,9 @@
   "scripts": {
     "login": "node scripts/login_browser_native.mjs",
     "login:browser": "node scripts/login_browser_native.mjs",
+    "login:http": "node scripts/login_http_protocol.mjs",
     "login:protocol": "node lib/jd_login_service_protocol.mjs",
+    "test": "node --test",
     "install:browsers": "npx playwright install chromium",
     "clean": "rm -rf outputs/* browser-profile && mkdir -p outputs && touch outputs/.gitkeep",
     "setup:python": "bash scripts/setup_python.sh"

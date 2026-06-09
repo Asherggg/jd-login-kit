@@ -3,6 +3,8 @@ node_modules/
 outputs/*
 !outputs/.gitkeep
 browser-profile/
+browser-profile*/
+.codegraph/
 *.log
 .DS_Store
 __pycache__/

@@ -184,6 +184,66 @@ def estimate_gap(bg: Image.Image, patch: Image.Image, y_hint: int | None, ui_wid
     }
 
 
+
+_DDDDOCR_SLIDE = None
+_CAPTCHA_RECOGNIZER_SLIDER = None
+
+def solver_distance(bg: Image.Image, patch: Image.Image, y_hint: int | None, ui_width: int, solver: str = "builtin") -> dict:
+    """Return a JD UI drag distance using one of the available pure-HTTP image solvers."""
+    solver = (solver or "builtin").strip().lower()
+    if solver in {"builtin", "native", "edge"}:
+        gap = estimate_gap(bg, patch, y_hint, ui_width)
+        gap["solver"] = "builtin"
+        return gap
+
+    if solver == "ddddocr":
+        global _DDDDOCR_SLIDE
+        import ddddocr
+        if _DDDDOCR_SLIDE is None:
+            _DDDDOCR_SLIDE = ddddocr.DdddOcr(det=False, ocr=False, show_ad=False)
+        r = _DDDDOCR_SLIDE.slide_match(patch, bg, simple_target=False)
+        bg_x = int(round(float(r.get("target_x", r.get("target", [0, 0])[0]))))
+        ui_x = bg_x * ui_width / bg.size[0]
+        return {
+            "solver": "ddddocr",
+            "raw": r,
+            "chosen_x_bg": bg_x,
+            "ui_first_last": ui_x,
+            "down_distance": max(1, int(round(ui_x))),
+        }
+
+    if solver in {"captcha-recognizer", "captcha_recognizer", "recognizer"}:
+        global _CAPTCHA_RECOGNIZER_SLIDER
+        import tempfile
+        from captcha_recognizer.slider import Slider
+        if _CAPTCHA_RECOGNIZER_SLIDER is None:
+            _CAPTCHA_RECOGNIZER_SLIDER = Slider()
+        recog = _CAPTCHA_RECOGNIZER_SLIDER
+        # captcha-recognizer works on one background image and returns the left edge
+        # of the detected hole in source-image pixels.
+        with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as f:
+            tmp = f.name
+        try:
+            bg.convert("RGB").save(tmp)
+            r = recog.identify_offset(tmp)
+        finally:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+        bg_x = float(r[0] if isinstance(r, (list, tuple)) else r)
+        conf = float(r[1]) if isinstance(r, (list, tuple)) and len(r) > 1 else None
+        ui_x = bg_x * ui_width / bg.size[0]
+        return {
+            "solver": "captcha-recognizer",
+            "raw": {"offset": bg_x, "confidence": conf},
+            "chosen_x_bg": bg_x,
+            "ui_first_last": ui_x,
+            "down_distance": max(1, int(round(ui_x))),
+        }
+
+    raise ValueError(f"unknown solver: {solver}")
+
 def make_mouse_pos(slider_left: int, slider_top: int, down_distance: int, *, duration_ms: int | None = None) -> List[List[int]]:
     """Recreate JD mousePos shape.
 
@@ -465,6 +525,7 @@ def main():
     ap.add_argument("--slider-left", type=int, default=0)
     ap.add_argument("--slider-top", type=int, default=156)
     ap.add_argument("--distance", type=int, help="override down-distance in UI pixels")
+    ap.add_argument("--solver", default="builtin", help="image solver: builtin, ddddocr, captcha-recognizer")
     ap.add_argument("--out", default="work/protocol_chain/out_py")
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--warm-seq", action="store_true", help="send approximate seq.jd.com behavior chain before s.html")
@@ -520,7 +581,7 @@ def main():
         patch = decode_image(g["patch"], args.cookie)
         y = int(g.get("y") or 0)
         challenge = g.get("challenge") or g.get("c")
-    gap = estimate_gap(bg, patch, y, args.w)
+    gap = solver_distance(bg, patch, y, args.w, args.solver)
     if args.distance is not None:
         gap["down_distance"] = args.distance
         gap["override_distance"] = True
