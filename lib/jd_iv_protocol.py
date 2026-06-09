@@ -219,14 +219,15 @@ def choose_captcha_gap(candidate_gap: dict, builtin_gap: dict, *, min_confidence
             return _skip_gap('captcha-recognizer', 'captcha_confidence_below_threshold', candidate_gap, builtin_gap)
         if not (lo <= dist <= hi):
             return _skip_gap('captcha-recognizer', 'captcha_distance_out_of_range', candidate_gap, builtin_gap)
-        if max_builtin_delta is not None and delta > int(max_builtin_delta):
+        y_aligned = bool((candidate_gap.get('raw') or {}).get('box_y_aligned'))
+        if max_builtin_delta is not None and delta > int(max_builtin_delta) and not y_aligned:
             out = _skip_gap('captcha-recognizer', 'captcha_builtin_delta_too_large', candidate_gap, builtin_gap)
             out['builtin_delta'] = delta
             return out
         kept = dict(candidate_gap)
         kept['builtin_distance'] = builtin_gap.get('down_distance')
         kept['builtin_delta'] = delta
-        kept['quality'] = 'high'
+        kept['quality'] = 'high_y_aligned' if y_aligned else 'high'
         kept['distance_range'] = [lo, hi]
         return kept
 
@@ -258,6 +259,34 @@ def choose_solver_gap(requested_solver: str, candidate_gap: dict, builtin_gap: d
             chosen['candidate_distance'] = candidate_gap.get('down_distance')
             return chosen
     return candidate_gap
+
+
+def captcha_recognizer_box_gap(box: Sequence[float], confidence: float | None, *, y_hint: int | None, bg_width: int, ui_width: int, y_tolerance: int = 12) -> dict:
+    x1, y1, x2, y2 = [float(v) for v in box[:4]]
+    ui_x = x1 * ui_width / bg_width
+    y_delta = abs(y1 - int(y_hint)) if y_hint is not None else None
+    y_aligned = y_delta is not None and y_delta <= int(y_tolerance)
+    return {
+        'solver': 'captcha-recognizer',
+        'raw': {
+            'offset': x1,
+            'confidence': confidence,
+            'box': [x1, y1, x2, y2],
+            'box_x1': x1,
+            'box_y1': y1,
+            'box_x2': x2,
+            'box_y2': y2,
+            'box_width': x2 - x1,
+            'box_height': y2 - y1,
+            'box_y_delta': y_delta,
+            'box_y_aligned': y_aligned,
+            'box_y_tolerance': int(y_tolerance),
+            'y_hint': y_hint,
+        },
+        'chosen_x_bg': x1,
+        'ui_first_last': ui_x,
+        'down_distance': max(1, int(round(ui_x))),
+    }
 
 
 def planned_submit_attempts(base_distance: int, offsets: Sequence[int], *, trajectory_variants: int = 1) -> List[dict]:
@@ -510,7 +539,7 @@ def ddddocr_tuned_gap(bg: Image.Image, patch: Image.Image, y_hint: int | None, u
 _DDDDOCR_SLIDE = None
 _CAPTCHA_RECOGNIZER_SLIDER = None
 
-def solver_distance(bg: Image.Image, patch: Image.Image, y_hint: int | None, ui_width: int, solver: str = "builtin", *, captcha_min_confidence: float = 0.8, captcha_skip_low_quality: bool = False, captcha_distance_range: str | tuple[int, int] = (45, 135), captcha_max_builtin_delta: int | None = None, ddddocr_presets: str | None = None, ddddocr_coordinate: str = 'auto', ddddocr_min_confidence: float = 0.2, ddddocr_distance_range: str | tuple[int, int] = (45, 135)) -> dict:
+def solver_distance(bg: Image.Image, patch: Image.Image, y_hint: int | None, ui_width: int, solver: str = "builtin", *, captcha_min_confidence: float = 0.8, captcha_skip_low_quality: bool = False, captcha_distance_range: str | tuple[int, int] = (45, 135), captcha_max_builtin_delta: int | None = None, captcha_y_tolerance: int = 12, ddddocr_presets: str | None = None, ddddocr_coordinate: str = 'auto', ddddocr_min_confidence: float = 0.2, ddddocr_distance_range: str | tuple[int, int] = (45, 135)) -> dict:
     """Return a JD UI drag distance using one of the available pure-HTTP image solvers."""
     solver = (solver or "builtin").strip().lower()
     if solver in {"builtin", "native", "edge"}:
@@ -554,22 +583,28 @@ def solver_distance(bg: Image.Image, patch: Image.Image, y_hint: int | None, ui_
             tmp = f.name
         try:
             bg.convert("RGB").save(tmp)
-            r = recog.identify_offset(tmp)
+            box, conf = recog.identify(tmp)
         finally:
             try:
                 os.unlink(tmp)
             except OSError:
                 pass
-        bg_x = float(r[0] if isinstance(r, (list, tuple)) else r)
-        conf = float(r[1]) if isinstance(r, (list, tuple)) and len(r) > 1 else None
-        ui_x = bg_x * ui_width / bg.size[0]
-        candidate = {
-            "solver": "captcha-recognizer",
-            "raw": {"offset": bg_x, "confidence": conf},
-            "chosen_x_bg": bg_x,
-            "ui_first_last": ui_x,
-            "down_distance": max(1, int(round(ui_x))),
-        }
+        if box:
+            candidate = captcha_recognizer_box_gap(
+                box, float(conf) if conf is not None else None,
+                y_hint=y_hint,
+                bg_width=bg.size[0],
+                ui_width=ui_width,
+                y_tolerance=captcha_y_tolerance,
+            )
+        else:
+            candidate = {
+                "solver": "captcha-recognizer",
+                "raw": {"offset": 0.0, "confidence": 0.0, "box": []},
+                "chosen_x_bg": 0.0,
+                "ui_first_last": 0.0,
+                "down_distance": 1,
+            }
         builtin = estimate_gap(bg, patch, y_hint, ui_width)
         builtin["solver"] = "builtin"
         dr = parse_distance_range(captcha_distance_range) if isinstance(captcha_distance_range, str) else captcha_distance_range
@@ -869,6 +904,7 @@ def main():
     ap.add_argument("--captcha-skip-low-quality", action="store_true", help="do not submit s.html when captcha-recognizer candidate is low quality")
     ap.add_argument("--captcha-distance-range", default="45,135", help="accepted captcha-recognizer UI distance range when skip-low-quality is enabled")
     ap.add_argument("--captcha-max-builtin-delta", type=int, default=12, help="max distance delta vs builtin before skipping captcha-recognizer candidate")
+    ap.add_argument("--captcha-y-tolerance", type=int, default=12, help="captcha-recognizer box y tolerance against server g.html y before trusting it over builtin")
     ap.add_argument("--distance-offsets", default="0,-1,1,-2,2,-3,3", help="comma-separated fail offset matrix in UI px")
     ap.add_argument("--trajectory-variants", type=int, default=3, help="number of same-distance trajectory variants for refuse handling")
     ap.add_argument("--ddddocr-presets", default="", help="comma-separated pure ddddocr tuned presets")
@@ -937,6 +973,7 @@ def main():
         captcha_skip_low_quality=args.captcha_skip_low_quality,
         captcha_distance_range=args.captcha_distance_range,
         captcha_max_builtin_delta=args.captcha_max_builtin_delta,
+        captcha_y_tolerance=args.captcha_y_tolerance,
         ddddocr_presets=args.ddddocr_presets,
         ddddocr_coordinate=args.ddddocr_coordinate,
         ddddocr_min_confidence=args.ddddocr_min_confidence,

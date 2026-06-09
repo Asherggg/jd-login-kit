@@ -46,6 +46,7 @@ function parseArgs(argv) {
     captchaSkipLowQuality: process.env.JD_CAPTCHA_SKIP_LOW_QUALITY === 'true',
     captchaDistanceRange: process.env.JD_CAPTCHA_DISTANCE_RANGE || '45,135',
     captchaMaxBuiltinDelta: process.env.JD_CAPTCHA_MAX_BUILTIN_DELTA || '12',
+    captchaYTolerance: process.env.JD_CAPTCHA_Y_TOLERANCE || '12',
   };
   for (let i = 2; i < argv.length; i++) {
     const a = argv[i];
@@ -397,6 +398,7 @@ function runSlideSolver({ args, hidden, jar, pageUrl, outPrefix, seqSid }) {
     captchaSkipLowQuality: args.captchaSkipLowQuality,
     captchaDistanceRange: args.captchaDistanceRange,
     captchaMaxBuiltinDelta: args.captchaMaxBuiltinDelta,
+    captchaYTolerance: args.captchaYTolerance,
   });
   const cp = spawnSync(args.python, solverArgs, { encoding: 'utf8', timeout: 120000, maxBuffer: 20_000_000 });
   fs.writeFileSync(`${outPrefix}_slide_stdout.json`, cp.stdout || '');

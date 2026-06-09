@@ -192,13 +192,15 @@ test('buildPythonSolverArgs forwards captcha quality skip options', () => {
     captchaSkipLowQuality: true,
     captchaDistanceRange: '45,135',
     captchaMaxBuiltinDelta: 12,
+    captchaYTolerance: 12,
   });
 
-  assert.deepEqual(args.slice(-7), [
+  assert.deepEqual(args.slice(-9), [
     '--solver', 'captcha-recognizer',
     '--captcha-skip-low-quality',
     '--captcha-distance-range', '45,135',
     '--captcha-max-builtin-delta', '12',
+    '--captcha-y-tolerance', '12',
   ]);
 });
 

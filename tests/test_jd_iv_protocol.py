@@ -10,7 +10,7 @@ import jd_iv_protocol as mod
 from jd_iv_protocol import (
     choose_solver_gap, parse_distance_offsets, planned_submit_attempts,
     crop_patch_alpha, normalize_ddddocr_x, parse_distance_range,
-    choose_ddddocr_candidate, choose_captcha_gap,
+    choose_ddddocr_candidate, choose_captcha_gap, captcha_recognizer_box_gap,
 )
 from PIL import Image
 
@@ -198,6 +198,38 @@ class StrategyTests(unittest.TestCase):
         self.assertEqual(gap['skip_reason'], 'captcha_builtin_delta_too_large')
         self.assertEqual(gap['candidate_distance'], 120)
         self.assertEqual(gap['builtin_distance'], 90)
+
+    def test_captcha_gap_keeps_large_builtin_delta_when_box_y_matches_server_y(self):
+        candidate = {
+            'solver': 'captcha-recognizer',
+            'down_distance': 72,
+            'raw': {'confidence': 0.95, 'box_y_delta': 0.4, 'box_y_aligned': True},
+            'chosen_x_bg': 92.7,
+            'ui_first_last': 72.3,
+        }
+        builtin = {'solver': 'builtin', 'down_distance': 90}
+
+        gap = choose_captcha_gap(candidate, builtin, min_confidence=0.8, skip_low_quality=True, distance_range=(45, 135), max_builtin_delta=12)
+
+        self.assertFalse(gap.get('skipped', False))
+        self.assertEqual(gap['builtin_delta'], 18)
+        self.assertEqual(gap['quality'], 'high_y_aligned')
+
+    def test_captcha_recognizer_box_gap_scales_x_and_records_y_alignment(self):
+        gap = captcha_recognizer_box_gap(
+            [92.6578, 88.3713, 142.8453, 138.2518],
+            0.9469,
+            y_hint=88,
+            bg_width=360,
+            ui_width=281,
+            y_tolerance=12,
+        )
+
+        self.assertEqual(gap['down_distance'], 72)
+        self.assertAlmostEqual(gap['chosen_x_bg'], 92.6578)
+        self.assertAlmostEqual(gap['raw']['box_y_delta'], 0.3713, places=4)
+        self.assertTrue(gap['raw']['box_y_aligned'])
+        self.assertAlmostEqual(gap['raw']['box_width'], 50.1875, places=4)
 
     def test_captcha_gap_keeps_high_quality_candidate(self):
         candidate = {'solver': 'captcha-recognizer', 'down_distance': 91, 'raw': {'confidence': 0.95}, 'chosen_x_bg': 121, 'ui_first_last': 91}
