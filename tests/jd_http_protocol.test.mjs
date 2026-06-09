@@ -5,6 +5,7 @@ import {
   CookieJar,
   buildPythonSolverArgs,
   buildLoginServiceData,
+  isRetryableSlideSolverError,
   parseSeqSessionId,
   loginPageUrl,
   parseHiddenInputs,
@@ -220,6 +221,17 @@ test('buildPythonSolverArgs omits blank optional tuning values', () => {
   assert.equal(args.includes('--ddddocr-presets'), false);
   assert.equal(args.includes('--ddddocr-min-confidence'), false);
   assert.equal(args.includes('--ddddocr-distance-range'), false);
+});
+
+test('isRetryableSlideSolverError recognizes transient bad slide image decode failures', () => {
+  const err = new Error(`python slide solver failed status=1: Traceback (most recent call last):
+  File "D:\\coding\\project\\jd-login-kit\\lib\\jd_iv_protocol.py", line 930, in main
+    bg = decode_image(g["bg"], args.cookie)
+  File "D:\\coding\\project\\jd-login-kit\\lib\\jd_iv_protocol.py", line 92, in decode_image
+    return Image.open(BytesIO(base64.b64decode(s.split(",")[-1]))).convert("RGBA")`);
+
+  assert.equal(isRetryableSlideSolverError(err), true);
+  assert.equal(isRetryableSlideSolverError(new Error('python: module captcha_recognizer not found')), false);
 });
 
 test('parseSeqSessionId extracts jd seq session id', () => {

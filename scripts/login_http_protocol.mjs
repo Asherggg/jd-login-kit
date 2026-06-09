@@ -10,6 +10,7 @@ import {
   buildLoginServiceData,
   buildPythonSolverArgs,
   formEncode,
+  isRetryableSlideSolverError,
   loginPageUrl,
   parseHiddenInputs,
   parseJsonp,
@@ -483,7 +484,21 @@ async function main() {
     }
 
     console.log(`[${attempt}/${args.attempts}] solve slide by HTTP protocol (${args.solver})`);
-    const slide = runSlideSolver({ args, hidden, jar, pageUrl, outPrefix, seqSid });
+    let slide;
+    try {
+      slide = runSlideSolver({ args, hidden, jar, pageUrl, outPrefix, seqSid });
+    } catch (err) {
+      if (!isRetryableSlideSolverError(err)) throw err;
+      const retryable = {
+        success: false,
+        retryable: true,
+        reason: 'slide_solver_transient_image_decode_error',
+        message: String(err?.message || err).slice(0, 1000),
+      };
+      fs.writeFileSync(`${outPrefix}_slide_error.json`, JSON.stringify(retryable, null, 2));
+      console.log(`[${attempt}/${args.attempts}] slide solver transient decode error, retrying next challenge`);
+      continue;
+    }
     const sr = slide.s_response || {};
     fs.writeFileSync(`${outPrefix}_slide.json`, JSON.stringify(slide, null, 2));
     console.log(`[${attempt}/${args.attempts}] slide distance=${slide.gap?.down_distance} response=${JSON.stringify(sr)}`);
