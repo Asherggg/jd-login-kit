@@ -42,6 +42,9 @@ function parseArgs(argv) {
     ddddocrMinConfidence: process.env.JD_DDDDOCR_MIN_CONFIDENCE || '',
     ddddocrDistanceRange: process.env.JD_DDDDOCR_DISTANCE_RANGE || '',
     ddddocrBenchmarkJson: process.env.JD_DDDDOCR_BENCHMARK_JSON || '',
+    captchaSkipLowQuality: process.env.JD_CAPTCHA_SKIP_LOW_QUALITY === 'true',
+    captchaDistanceRange: process.env.JD_CAPTCHA_DISTANCE_RANGE || '45,135',
+    captchaMaxBuiltinDelta: process.env.JD_CAPTCHA_MAX_BUILTIN_DELTA || '12',
   };
   for (let i = 2; i < argv.length; i++) {
     const a = argv[i];
@@ -52,6 +55,7 @@ function parseArgs(argv) {
     if (a === '--warm-seq') { args.warmSeq = true; continue; }
     if (a === '--no-warm-seq') { args.warmSeq = false; continue; }
     if (a === '--save-cookie-values') { args.saveCookieValues = true; continue; }
+    if (a === '--captcha-skip-low-quality') { args.captchaSkipLowQuality = true; continue; }
     if (!a.startsWith('--')) continue;
     const k = a.slice(2).replace(/-([a-z])/g, (_, c) => c.toUpperCase());
     args[k] = argv[++i];
@@ -389,6 +393,9 @@ function runSlideSolver({ args, hidden, jar, pageUrl, outPrefix, seqSid }) {
     ddddocrMinConfidence: args.ddddocrMinConfidence,
     ddddocrDistanceRange: args.ddddocrDistanceRange,
     ddddocrBenchmarkJson: args.ddddocrBenchmarkJson,
+    captchaSkipLowQuality: args.captchaSkipLowQuality,
+    captchaDistanceRange: args.captchaDistanceRange,
+    captchaMaxBuiltinDelta: args.captchaMaxBuiltinDelta,
   });
   const cp = spawnSync(args.python, solverArgs, { encoding: 'utf8', timeout: 120000, maxBuffer: 20_000_000 });
   fs.writeFileSync(`${outPrefix}_slide_stdout.json`, cp.stdout || '');

@@ -65,7 +65,7 @@ COOKIE_NAMES=_t,3AB9...,thor,pin,unick,_pst,...
 
 - 默认会发送协议版 seq 行为日志，降低 `newSafeVerify` 概率；调试时可加 `--no-warm-seq` 关闭。
 - 滑块服务端偶发 `refuse` 属正常现象，脚本会 fresh challenge 重试；可用 `--attempts 12` 增加次数。
-- Recommended slide solver: `--solver captcha-recognizer`. Strategy options: `--captcha-min-confidence 0.8` falls back to builtin on low confidence; `--trajectory-variants 3` retries trajectory variants for `refuse`; `--distance-offsets 0,-1,1,-2,2,-3,3` tries an offset matrix for `fail`.
+- Recommended slide solver: `--solver captcha-recognizer`. Add `--captcha-skip-low-quality --captcha-min-confidence 0.8 --captcha-distance-range 45,135 --captcha-max-builtin-delta 12` to skip bad challenges before `s.html`; keep `--trajectory-variants 3 --distance-offsets 0,-1,1,-2,2,-3,3` only for high-quality submitted candidates.
 - `--solver ddddocr` uses `slide_match(..., simple_target=True)` for slider captcha matching; use `--solver ddddocr-normal` only for the legacy `simple_target=False` mode.
 - Pure ddddocr tuning mode: `--solver ddddocr-tuned --ddddocr-presets alpha-crop-simple,edge-crop-simple,roi-y-simple,contrast-simple,raw-simple,raw-edge --ddddocr-coordinate auto --ddddocr-min-confidence 0.2 --ddddocr-distance-range 45,135`. Offline analysis: `npm run benchmark:ddddocr -- --limit 60`.
 - 这个入口拿到的是 HTTP cookie jar，不会自动写入当前 Edge/Chrome 用户数据目录。

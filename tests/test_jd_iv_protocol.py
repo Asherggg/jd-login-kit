@@ -10,7 +10,7 @@ import jd_iv_protocol as mod
 from jd_iv_protocol import (
     choose_solver_gap, parse_distance_offsets, planned_submit_attempts,
     crop_patch_alpha, normalize_ddddocr_x, parse_distance_range,
-    choose_ddddocr_candidate,
+    choose_ddddocr_candidate, choose_captcha_gap,
 )
 from PIL import Image
 
@@ -167,6 +167,47 @@ class StrategyTests(unittest.TestCase):
         self.assertTrue(gap['skipped'])
         self.assertEqual(gap['skip_reason'], 'skipped_bad_ddddocr_candidate')
         self.assertEqual(gap['s_response']['message'], 'skipped_bad_ddddocr_candidate')
+
+
+    def test_captcha_gap_skips_low_confidence_when_requested(self):
+        candidate = {'solver': 'captcha-recognizer', 'down_distance': 90, 'raw': {'confidence': 0.5}, 'chosen_x_bg': 120, 'ui_first_last': 90}
+        builtin = {'solver': 'builtin', 'down_distance': 92, 'chosen_x_bg': 122}
+
+        gap = choose_captcha_gap(candidate, builtin, min_confidence=0.8, skip_low_quality=True, distance_range=(45, 135), max_builtin_delta=12)
+
+        self.assertTrue(gap['skipped'])
+        self.assertEqual(gap['skip_reason'], 'captcha_confidence_below_threshold')
+        self.assertEqual(gap['s_response']['nextVerify'], 'SKIP_SUBMIT')
+
+    def test_captcha_gap_skips_distance_out_of_range(self):
+        candidate = {'solver': 'captcha-recognizer', 'down_distance': 34, 'raw': {'confidence': 0.95}, 'chosen_x_bg': 45, 'ui_first_last': 34}
+        builtin = {'solver': 'builtin', 'down_distance': 90}
+
+        gap = choose_captcha_gap(candidate, builtin, min_confidence=0.8, skip_low_quality=True, distance_range=(45, 135), max_builtin_delta=99)
+
+        self.assertTrue(gap['skipped'])
+        self.assertEqual(gap['skip_reason'], 'captcha_distance_out_of_range')
+
+    def test_captcha_gap_skips_large_builtin_delta(self):
+        candidate = {'solver': 'captcha-recognizer', 'down_distance': 120, 'raw': {'confidence': 0.95}, 'chosen_x_bg': 160, 'ui_first_last': 120}
+        builtin = {'solver': 'builtin', 'down_distance': 90}
+
+        gap = choose_captcha_gap(candidate, builtin, min_confidence=0.8, skip_low_quality=True, distance_range=(45, 135), max_builtin_delta=12)
+
+        self.assertTrue(gap['skipped'])
+        self.assertEqual(gap['skip_reason'], 'captcha_builtin_delta_too_large')
+        self.assertEqual(gap['candidate_distance'], 120)
+        self.assertEqual(gap['builtin_distance'], 90)
+
+    def test_captcha_gap_keeps_high_quality_candidate(self):
+        candidate = {'solver': 'captcha-recognizer', 'down_distance': 91, 'raw': {'confidence': 0.95}, 'chosen_x_bg': 121, 'ui_first_last': 91}
+        builtin = {'solver': 'builtin', 'down_distance': 90}
+
+        gap = choose_captcha_gap(candidate, builtin, min_confidence=0.8, skip_low_quality=True, distance_range=(45, 135), max_builtin_delta=12)
+
+        self.assertFalse(gap.get('skipped', False))
+        self.assertEqual(gap['solver'], 'captcha-recognizer')
+        self.assertEqual(gap['builtin_distance'], 90)
 
     def test_parse_distance_range_accepts_min_max_text(self):
         self.assertEqual(parse_distance_range('45,135'), (45, 135))

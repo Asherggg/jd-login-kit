@@ -179,6 +179,49 @@ test('buildPythonSolverArgs forwards ddddocr tuned options', () => {
   ]);
 });
 
+
+
+test('buildPythonSolverArgs forwards captcha quality skip options', () => {
+  const args = buildPythonSolverArgs({
+    scriptPath: 'lib/jd_iv_protocol.py',
+    hidden: { eid: 'eid-1', eid2: 'jstk-1', sessionId: 'sid-1' },
+    username: 'jd_mercury',
+    outPrefix: 'outputs/out',
+    solver: 'captcha-recognizer',
+    captchaSkipLowQuality: true,
+    captchaDistanceRange: '45,135',
+    captchaMaxBuiltinDelta: 12,
+  });
+
+  assert.deepEqual(args.slice(-7), [
+    '--solver', 'captcha-recognizer',
+    '--captcha-skip-low-quality',
+    '--captcha-distance-range', '45,135',
+    '--captcha-max-builtin-delta', '12',
+  ]);
+});
+
+
+
+test('buildPythonSolverArgs omits blank optional tuning values', () => {
+  const args = buildPythonSolverArgs({
+    scriptPath: 'lib/jd_iv_protocol.py',
+    hidden: { eid: 'eid-1', eid2: 'jstk-1', sessionId: 'sid-1' },
+    username: 'jd_mercury',
+    outPrefix: 'outputs/out',
+    solver: 'captcha-recognizer',
+    ddddocrCoordinate: '',
+    ddddocrPresets: '',
+    ddddocrMinConfidence: '',
+    ddddocrDistanceRange: '',
+  });
+
+  assert.equal(args.includes('--ddddocr-coordinate'), false);
+  assert.equal(args.includes('--ddddocr-presets'), false);
+  assert.equal(args.includes('--ddddocr-min-confidence'), false);
+  assert.equal(args.includes('--ddddocr-distance-range'), false);
+});
+
 test('parseSeqSessionId extracts jd seq session id', () => {
   assert.equal(
     parseSeqSessionId('var _jdtdmap_sessionId="4971126450824985710";var _jdtdseq_config_data={}'),
